@@ -1,21 +1,32 @@
 # ############################################################
-# python class that deals with usb_gpio 
+# python class that deals with usb_gpio
 # for controlling various instrumentations
-# author  Federico Corradi - federico.corradi@inilabs.com
+# author (base) Federico Corradi - federico.corradi@inilabs.com
+# author (2019) Germain Haessig - germain@ini.uzh.ch
 # ############################################################
 from __future__ import division
 import os
 import gpib
 import time
 import numpy as np
+import os
+
 
 class gpio_usb:
     def __init__(self):
         # defined in /etc/gpib.conf
-        self.fun_gen = gpib.find("hp33120A") 
-        self.k230 = gpib.find("k230") 
-        self.k236 = gpib.find("k236") 
- 
+
+        # run shell script to configure GPIB
+        os.system('gpib/start_gpib.sh')
+
+        self.fun_gen = gpib.find("hp33120A")
+        self.k230 = gpib.find("k230")
+        self.k236 = gpib.find("k236")
+
+        print(self.query(self.fun_gen, "*IDN?"))
+        self.set_dc_voltage(0)
+        self.fun_gen_off()
+
     def query(self, handle, command, numbytes=100):
 	    gpib.write(handle,command)
 	    time.sleep(0.1)
@@ -25,10 +36,45 @@ class gpio_usb:
     def set_inst(self, handle, command, numbytes=100):
 	    gpib.write(handle,command)
 	    time.sleep(0.1)
-	    return 
+	    return
 
     def close(self):
+        self.set_dc_voltage(0)
+        self.fun_gen_off()
         gpib.close(self.fun_gen)
+        gpib.close(self.k230)
+        gpib.close(self.k236)
+
+    # Set current max output to max value
+    def set_current_max():
+        self.set_inst(self.k230,"I0M1D0F1X")
+        self.set_inst(self.k230,"I2X") # set current limit to max
+
+    # Set k230 DC voltage
+    def set_dc_voltage(v):
+        self.set_inst(self.k230,"V"+str(round(v,3))) #voltage output
+        self.set_inst(self.k230,"F1X") #operate
+
+    # Turn off function generator
+    def fun_gen_off():
+        self.set_inst(self.fun_gen,"APPL:DC DEF, DEF, 0")
+
+    # Generate sine wave
+    def set_sin(freq, amp, offset = 0.):
+        self.set_inst(self.fun_gen,"APPL:SIN "+str(freq)+", "+str(amp)+",0")
+        self.set_inst(self.k230,"V"+str(round(offset,3))) #voltage output
+        self.set_inst(self.k230,"F1X") #operate
+
+    def set_square(freq, amp, offset = 0.):
+        self.set_inst(self.fun_gen,"APPL:SQUARE "+str(freq)+", "+str(amp)+",0")
+        self.set_inst(self.k230,"V"+str(round(offset,3))) #voltage output
+        self.set_inst(self.k230,"F1X") #operate
+
+    # Turn on Sync
+    def enable_sync():
+        self.set_inst(self.fun_gen,"OUTPut:SYNC ON") # enable sync
+
+
 
     def set_source_function_k236(self, source, function):
         '''
@@ -39,15 +85,15 @@ class gpio_usb:
         function : 'dc' , 'sweep'
             dc or sweep operating function
         '''
-        source_dict = {'v':'0','i':'1'}    
+        source_dict = {'v':'0','i':'1'}
         function_dict = {'dc':'0','sweep':'1'}
-        
-        try: 
+
+        try:
             source = source_dict[source.lower()]
             function = function_dict[function.lower()]
         except(KeyError):
             raise ValueError('ERROR: bad values for source and/or function')
-        
+
         self.query(self.k236,'F%s,%sX'%(source,function))
 
     def set_compliance_k236(self, level, range_=0):
@@ -55,26 +101,26 @@ class gpio_usb:
         Parmeters
         ---------
         level : float
-            compliance level. valid range is  -100 to +100 mA for 
+            compliance level. valid range is  -100 to +100 mA for
             I-measure, and -110, to +110V for V-measure
         range_ : int
             compliance/measure range. 0 = Auto, see manual for rest.
-        
+
         '''
         self.query(self.k236,'L%f,%iX'%(level, range_))
 
     def set_trigger_config_k236(self, origin, in_, out, end):
         '''
-        Set the trigger configuration. 
+        Set the trigger configuration.
         This function takes strings for all arguments, the corresponding
-        integers that are sent in the VISA command are given in hard 
-        brackets in the comments 
-        
+        integers that are sent in the VISA command are given in hard
+        brackets in the comments
+
         Parameters
         -----------
         origin : string, case in-sensitive
             Input trigger origin:
-                'x'     : [0]  IEEE X 
+                'x'     : [0]  IEEE X
                 'get'   : [1]  IEEE GEt
                 'talk'  : [2]  IEEE Talk
                 'ext'   : [3]  External (TRIGGER IN pulse)
@@ -90,25 +136,25 @@ class gpio_usb:
                 's^d^m' : [6]
                 '^s^d^m'  : [7]
                 '^single' : [8] Single Pulse
-                
+
         out : string
             Output trigger generation:
                 'none'  : [0] none during sweep
                 's^dm'  : [1] (end of source)
                 'sd^m'  : [2] (end of delay)
-                's^d^m' : [3] 
+                's^d^m' : [3]
                 'sdm^'  : [4] (end of measure)
                 's^dm^' : [5]
                 'sd^m^' : [6]
                 's^d^m^'    : [7]
                 'pulse_end' : [8] Pulse end
-        
+
         end : Boolean
             Sweep End^ trigger out:
                 'disable' : [0]
                 'enable' : [1]
         '''
-        # dictionary's mapping input strings to integer values for 
+        # dictionary's mapping input strings to integer values for
         # gpib command
         origin_dict = {'x':0,'get':1,'talk':2,'ext':3,'imm':4}
         in_dict = {'cont':0,'^sdm':2,'^s^dm':3,'sd^m':4,'^sd^m':5,
@@ -116,35 +162,35 @@ class gpio_usb:
         out_dict = {'none':0,'s^dm':1,'sd^m':2,'s^d^m':3,'sdm^':4,
             's^dm^':5,'sd^m^':6,'s^d^m^':7,'pulse_end':8}
         end_dict = {'disable':0,'enable':1}
-        
+
         # lower strings so that its case insenstive
         origin = origin.lower()
         in_ = in_.lower()
         out= out.lower()
         end = end.lower()
-        
+
         # check out input values
         if origin not in origin_dict.keys():
             raise(ValueError('bad value for origin'))
-        
+
         if in_ not in in_dict.keys():
             raise(ValueError('bad value for in_'))
-        
+
         if out not in out_dict.keys():
             raise(ValueError('bad value for out'))
-        
+
         if end not in end_dict.keys():
             raise(ValueError('bad value for end'))
-        
+
         print ('T%i,%i,%i,%iX'%(origin_dict[origin],
-            in_dict[in_], out_dict[out], end_dict[end]))    
+            in_dict[in_], out_dict[out], end_dict[end]))
         # send comand
         self.query(self.k236,'T%i,%i,%i,%iX'%(origin_dict[origin],
             in_dict[in_], out_dict[out], end_dict[end]))
 
     def enable_trigger_k236(self):
         '''
-        enable input triggering 
+        enable input triggering
         '''
         self.query(self.k236,'R1X'%value)
 
@@ -152,13 +198,13 @@ class gpio_usb:
         '''
         '''
         self.query(self.k236,'R0X'%value)
-    
+
     def trigger_k236(self):
         '''
         cause immediate trigger
         '''
         self.query(self.k236,'H0X')
-    
+
     def operate_k236(self):
         '''
         '''
@@ -168,18 +214,18 @@ class gpio_usb:
         '''
         '''
         self.query(self.k236,'N0X')
-            
+
     def set_voltage_k236(self):
         '''
         '''
         raise(NotImplementedError)
-    
+
     def create_sweep_linear_stair_k236(self, start, stop, step, range_, delay):
         '''
         '''
-        self.query(self.k236,'Q1,%f,%f,%f,%f,%fX'%(start, stop, step, range_, 
+        self.query(self.k236,'Q1,%f,%f,%f,%f,%fX'%(start, stop, step, range_,
             delay))
-            
+
     def reset_factory_defaults_k236(self):
         '''
         Reset to factor defaults
@@ -220,7 +266,7 @@ class gpio_usb:
             print float(valore)
             measured.append(float(valore))
             time.sleep(delay)
-            
+
         return measured
 
 if __name__ == "__main__":
@@ -233,4 +279,3 @@ if __name__ == "__main__":
     gpio_cnt.set_inst(gpio_cnt.fun_gen,"APPL:SIN 0.1, 0.1, 0") #0.1 Vpp sine wave at 1 Hz with a 0 volt offset
 
     measured = gpio_cnt.meas_k236( 'I', np.linspace(0,0.005,10), 100)
-
